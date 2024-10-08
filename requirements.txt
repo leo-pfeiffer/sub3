@@ -1,1 +1,7 @@
 tcxreader==0.4.10
+streamlit==1.38.0
+streamlit-echarts==0.4.0
+matplotlib==3.9.2
+altair~=5.4.1
+requests~=2.32.3
+python-dotenv~=1.0.1
