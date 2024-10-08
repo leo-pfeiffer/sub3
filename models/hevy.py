@@ -1,4 +1,3 @@
-import csv
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -7,6 +6,10 @@ from datetime import datetime
 class HevySet:
     weight_lbs: float
     reps: int
+
+    @property
+    def one_rep_max(self):
+        return self.weight_lbs * (1 + self.reps / 30)
 
 
 @dataclass
@@ -29,6 +32,14 @@ class HevyWorkout:
     end_time: datetime
     description: str
     exercises: dict[str, HevyExercise]
+
+    @property
+    def duration(self):
+        return (self.end_time - self.start_time).total_seconds()
+
+    @property
+    def volume(self):
+        return sum(sum(s.weight_lbs for s in e.sets) for e in self.exercises.values())
 
     class Builder:
         title: str | None = None
