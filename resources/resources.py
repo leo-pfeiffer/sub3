@@ -70,16 +70,6 @@ TIMER_HTML = """
 </html>               
 """
 
-STRAVA_EMBED_HTML = """
-<!DOCTYPE html>
-<html lang="en">
-<div style="display: flex; justify-content: center; align-items: center; height: 100%;">
-<div class="strava-embed-placeholder" data-embed-type="activity" data-embed-id="12532420236" data-style="standard"></div>
-</div>
-<script src="https://strava-embeds.com/embed.js"></script>
-</html>
-"""
-
 _PACE_FORMATTER = """function (params) {
     console.log();
     var value = params[0].value;
@@ -90,8 +80,10 @@ _PACE_FORMATTER = """function (params) {
     }
     var formattedValue = minutes + ':' + seconds;
     return `${params[0].name} : ${formattedValue}`;
-}""".replace("\n", " ")
-PACE_FORMATTER = re.sub(r'\s+', " ", _PACE_FORMATTER)
+}""".replace(
+    "\n", " "
+)
+PACE_FORMATTER = re.sub(r"\s+", " ", _PACE_FORMATTER)
 
 _SHOE_FORMATTER = """function (params) {
     let lowerCaseName = params[0].name.toLowerCase();
@@ -108,5 +100,7 @@ _SHOE_FORMATTER = """function (params) {
         return `<img src="https://i.imghippo.com/files/Ki7TO1728072531.png" width="60" height="30">`;
     }
     return null;
-}""".replace("\n", " ")
-SHOE_FORMATTER = re.sub(r'\s+', " ", _SHOE_FORMATTER)
+}""".replace(
+    "\n", " "
+)
+SHOE_FORMATTER = re.sub(r"\s+", " ", _SHOE_FORMATTER)

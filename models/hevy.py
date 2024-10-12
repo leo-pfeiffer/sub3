@@ -94,6 +94,6 @@ class HevyWorkout:
                 self.start_time,
                 self.end_time,
                 self.description,
-                self.exercises
+                self.exercises,
             )
             return workout

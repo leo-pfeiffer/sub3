@@ -8,7 +8,7 @@ def get_first_day_of_week(dt: datetime.datetime) -> datetime.date:
 
 
 def date_to_str(dt: datetime.date):
-    return dt.strftime('%Y-%m-%d')
+    return dt.strftime("%Y-%m-%d")
 
 
 def m_to_km_or_mi(m: int, imperial=False):
@@ -27,7 +27,9 @@ def ms_to_min_km_or_min_mi(ms: int, imperial=False):
     return 1000 / (ms * 60)
 
 
-def get_list_of_dates_between(start: datetime.datetime, end: datetime.datetime, delta: int):
+def get_list_of_dates_between(
+    start: datetime.datetime, end: datetime.datetime, delta: int
+):
     dates = []
     current = get_first_day_of_week(start)
     while current <= end.date():

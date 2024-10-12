@@ -52,3 +52,23 @@ class PaceZone(Enum):
             if zone.min_speed <= speed <= zone.max_speed:
                 return zone
         return None
+
+
+class RecoveryZone(Enum):
+    RED = "Red", 0, 33
+    YELLOW = "Yellow", 34, 66
+    GREEN = "Green", 67, 100
+
+    def __init__(self, _, min_percent, max_percent):
+        self.min_percent = min_percent
+        self.max_percent = max_percent
+
+    @staticmethod
+    def zone(percent: int):
+        """
+        For a given percentage, return the zone it falls into.
+        """
+        for zone in RecoveryZone:
+            if zone.min_percent <= percent <= zone.max_percent:
+                return zone
+        return None

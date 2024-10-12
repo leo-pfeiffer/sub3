@@ -10,15 +10,15 @@ from tcxreader import TCXExercise, TCXTrackPoint, TCXReader
 
 from constants import DURATIONS, DISTANCE_NAMES, PLAN_START_DATE
 from models.strava import MinimalRun
+from models.whoop import WhoopCycle
 from utils import get_list_of_dates_between, get_first_day_of_week, date_to_str
-from enums import HeartRateZone, PaceZone
+from enums import HeartRateZone, PaceZone, RecoveryZone
 from models.hevy import HevyWorkout
 
 
 class DataUtils(ABC):
-
     @abstractmethod
-    def workout_start_times(self):
+    def data_period_start_times(self):
         ...
 
     @abstractmethod
@@ -26,34 +26,53 @@ class DataUtils(ABC):
         ...
 
     def dates(self):
-        start = min(self.workout_start_times())
-        end = max(self.workout_start_times())
+        start = min(self.data_period_start_times())
+        end = max(self.data_period_start_times())
         return get_list_of_dates_between(start, end, 1)
 
     def dates_str(self):
         return [date_to_str(d) for d in self.dates()]
 
     def week_start_dates(self):
-        start = min(self.workout_start_times())
-        end = max(self.workout_start_times())
+        start = min(self.data_period_start_times())
+        end = max(self.data_period_start_times())
         return get_list_of_dates_between(start, end, 7)
 
     def _group_by_date(
-            self,
-            workouts: list[HevyWorkout | TCXExercise],
-            value_func: Callable[[HevyWorkout | TCXExercise], Any],
-            weekly=False,
-            default_value: Any = 0.0,
-            default_agg_func: Callable = lambda x, y: x + y
+        self,
+        workouts: list[HevyWorkout | TCXExercise | WhoopCycle],
+        value_func: Callable[[HevyWorkout | TCXExercise | WhoopCycle], Any],
+        weekly=False,
+        default_value: Any = 0.0,
+        agg_func: Callable = lambda x, y: x + y,
     ):
         grouped: dict[date, Any] = {}
         for workout in workouts:
-            k = get_first_day_of_week(workout.start_time) if weekly else workout.start_time.date()
+            k = (
+                get_first_day_of_week(workout.start_time)
+                if weekly
+                else workout.start_time.date()
+            )
             if k not in grouped:
                 grouped[k] = default_value
-            grouped[k] = default_agg_func(grouped[k], value_func(workout))
+            grouped[k] = agg_func(grouped[k], value_func(workout))
         groups = self.week_start_dates() if weekly else self.dates()
         return [grouped.get(g, default_value) for g in groups]
+
+    @staticmethod
+    def _get_zone_percentages(
+        zone: HeartRateZone | PaceZone | RecoveryZone, zone_data: list
+    ):
+        percentages = []
+        for z in zone_data:
+            total = sum(z.values())
+            if total == 0:
+                percentages.append(0)
+            else:
+                if zone not in z:
+                    z[zone] = 0
+                percentages.append(round(z[zone] / total * 100, 2))
+        return percentages
 
 
 class HevyUtils(DataUtils):
@@ -65,8 +84,7 @@ class HevyUtils(DataUtils):
 
     def load_data(self):
         self._workouts = [
-            w for w in self.load_from_source()
-            if w.start_time >= PLAN_START_DATE
+            w for w in self.load_from_source() if w.start_time >= PLAN_START_DATE
         ]
 
     def load_from_source(self):
@@ -109,11 +127,11 @@ class HevyUtils(DataUtils):
                 _reps,
                 _distance_miles,
                 _duration_seconds,
-                _rpe
+                _rpe,
             ] = csv_line
 
-            _start_time = datetime.strptime(_start_time_str, '%d %b %Y, %H:%M')
-            _end_time = datetime.strptime(_end_time_str, '%d %b %Y, %H:%M')
+            _start_time = datetime.strptime(_start_time_str, "%d %b %Y, %H:%M")
+            _end_time = datetime.strptime(_end_time_str, "%d %b %Y, %H:%M")
 
             if workout_builder.title is None:
                 workout_builder.with_title(_title)
@@ -138,7 +156,7 @@ class HevyUtils(DataUtils):
     @staticmethod
     def _read_hevy_csv(filepath: str):
         csv_lines = []
-        with open(filepath, 'r') as file:
+        with open(filepath, "r") as file:
             reader = csv.reader(file)
             next(reader)  # Skip the header row
             for row in reader:
@@ -149,22 +167,14 @@ class HevyUtils(DataUtils):
     def workouts(self):
         return self._workouts
 
-    def workout_start_times(self):
+    def data_period_start_times(self):
         return [w.start_time for w in self.workouts]
 
     def workout_duration(self, weekly=False):
-        return self._group_by_date(
-            self.workouts,
-            lambda w: w.duration,
-            weekly
-        )
+        return self._group_by_date(self.workouts, lambda w: w.duration, weekly)
 
     def workout_volume(self, weekly=False):
-        return self._group_by_date(
-            self.workouts,
-            lambda w: w.volume,
-            weekly
-        )
+        return self._group_by_date(self.workouts, lambda w: w.volume, weekly)
 
     @staticmethod
     def _get_one_rep_max_for_exercise(workout: HevyWorkout, exercise_name: str):
@@ -178,7 +188,7 @@ class HevyUtils(DataUtils):
             self.workouts,
             lambda w: self._get_one_rep_max_for_exercise(w, exercise_name),
             weekly,
-            default_agg_func=lambda x, y: max(x, y)
+            agg_func=lambda x, y: max(x, y),
         )
 
 
@@ -190,16 +200,16 @@ class TcxUtils(DataUtils):
 
     def load_data(self):
         self._workouts = [
-            w for w in self.load_from_source()
+            w
+            for w in self.load_from_source()
             if w.activity_type == "Running" and w.start_time >= PLAN_START_DATE
         ]
 
     def load_from_source(self):
-        file_names = [f for f in os.listdir(self.DATA_DIR) if f.endswith('.tcx')]
+        file_names = [f for f in os.listdir(self.DATA_DIR) if f.endswith(".tcx")]
         tcx_data = []
         tcx_reader = TCXReader()
         for file_name in file_names:
-            print(f"Reading file: {file_name}")
             file_location = os.path.join(self.DATA_DIR, file_name)
             _data = tcx_reader.read(file_location)
             tcx_data.append(_data)
@@ -218,22 +228,14 @@ class TcxUtils(DataUtils):
     def total_run_calories(self):
         return sum([w.calories for w in self.workouts])
 
-    def workout_start_times(self):
+    def data_period_start_times(self):
         return [w.start_time for w in self.workouts]
 
     def run_distances(self, weekly=False):
-        return self._group_by_date(
-            self.workouts,
-            lambda w: w.distance,
-            weekly
-        )
+        return self._group_by_date(self.workouts, lambda w: w.distance, weekly)
 
     def run_duration(self, weekly=False):
-        return self._group_by_date(
-            self.workouts,
-            lambda w: w.duration,
-            weekly
-        )
+        return self._group_by_date(self.workouts, lambda w: w.duration, weekly)
 
     def get_heart_rate_zone_percentages(self, zone: HeartRateZone, weekly=False):
         return self._get_zone_percentages(zone, self.heart_rate_zones(weekly))
@@ -243,7 +245,9 @@ class TcxUtils(DataUtils):
 
     @staticmethod
     def _heart_rate_zones(workout: TCXExercise):
-        trackpoints = TcxUtils.get_sorted_trackpoint_deltas(workout, lambda t: t.hr_value, "time")
+        trackpoints = TcxUtils.get_sorted_trackpoint_deltas(
+            workout, lambda t: t.hr_value, "time"
+        )
 
         # Calculate duration spent in each HeartRateZone
         zone_durations = {}
@@ -251,7 +255,9 @@ class TcxUtils(DataUtils):
             start = trackpoints[i]
             end = trackpoints[i + 1]
             duration = (end[0] - start[0]).total_seconds()
-            if duration > 15:  # Durations over 15s are likely paused workouts and are skipped
+            if (
+                duration > 15
+            ):  # Durations over 15s are likely paused workouts and are skipped
                 continue
             zone = HeartRateZone.zone(start[1])
             if zone not in zone_durations:
@@ -262,7 +268,9 @@ class TcxUtils(DataUtils):
 
     @staticmethod
     def _pace_zones(workout: TCXExercise):
-        trackpoints = TcxUtils.get_sorted_trackpoint_deltas(workout, lambda t: t.tpx_ext.get("Speed"), "time")
+        trackpoints = TcxUtils.get_sorted_trackpoint_deltas(
+            workout, lambda t: t.tpx_ext.get("Speed"), "time"
+        )
 
         # Calculate duration spent in each HeartRateZone
         zone_durations = {}
@@ -270,7 +278,9 @@ class TcxUtils(DataUtils):
             start = trackpoints[i]
             end = trackpoints[i + 1]
             duration = (end[0] - start[0]).total_seconds()
-            if duration > 15:  # Durations over 45s are likely paused workouts and are skipped
+            if (
+                duration > 15
+            ):  # Durations over 45s are likely paused workouts and are skipped
                 continue
             zone = PaceZone.zone(start[1])
             if zone not in zone_durations:
@@ -281,7 +291,9 @@ class TcxUtils(DataUtils):
 
     @staticmethod
     def _hr_zone_agg_func(zones1, zones2):
-        return {zone: zones1.get(zone, 0) + zones2.get(zone, 0) for zone in HeartRateZone}
+        return {
+            zone: zones1.get(zone, 0) + zones2.get(zone, 0) for zone in HeartRateZone
+        }
 
     @staticmethod
     def _pace_zone_agg_func(zones1, zones2):
@@ -293,7 +305,7 @@ class TcxUtils(DataUtils):
             self._heart_rate_zones,
             weekly=weekly,
             default_value={zone: 0 for zone in HeartRateZone},
-            default_agg_func=self._hr_zone_agg_func
+            agg_func=self._hr_zone_agg_func,
         )
 
     def pace_zones(self, weekly=False):
@@ -302,27 +314,14 @@ class TcxUtils(DataUtils):
             self._pace_zones,
             weekly=weekly,
             default_value={zone: 0 for zone in PaceZone},
-            default_agg_func=self._pace_zone_agg_func
+            agg_func=self._pace_zone_agg_func,
         )
 
     @staticmethod
-    def _get_zone_percentages(zone: HeartRateZone | PaceZone, zone_data: list):
-        percentages = []
-        for z in zone_data:
-            total = sum(z.values())
-            if total == 0:
-                percentages.append(0)
-            else:
-                if zone not in z:
-                    z[zone] = 0
-                percentages.append(round(z[zone] / total * 100, 2))
-        return percentages
-
-    @staticmethod
     def get_sorted_trackpoint_deltas(
-            workout: TCXExercise,
-            key_func: Callable[[TCXTrackPoint], int | float],
-            mode: str
+        workout: TCXExercise,
+        key_func: Callable[[TCXTrackPoint], int | float],
+        mode: str,
     ) -> list[tuple[Any, int | float, int | float]]:
 
         if mode == "time":
@@ -353,9 +352,9 @@ class TcxUtils(DataUtils):
 
     @staticmethod
     def calc_moving_average(
-            dataset: list[tuple[datetime, float | int, int]],
-            mode: str,
-            delta: int = 60,
+        dataset: list[tuple[datetime, float | int, int]],
+        mode: str,
+        delta: int = 60,
     ) -> list[float]:
         if mode == "time":
             delta_func = lambda x, y: (y[0] - x[0]).total_seconds()
@@ -370,31 +369,33 @@ class TcxUtils(DataUtils):
         moving_sum = 0
         normalizer = 0
         while right_idx < len(dataset):
-            delta_between_trackpoints = delta_func(dataset[left_idx], dataset[right_idx])
+            delta_between_trackpoints = delta_func(
+                dataset[left_idx], dataset[right_idx]
+            )
             if delta_between_trackpoints < delta:
-                moving_sum += (dataset[right_idx][1] * dataset[right_idx][2])
+                moving_sum += dataset[right_idx][1] * dataset[right_idx][2]
                 normalizer += dataset[right_idx][2]
                 right_idx += 1
             else:
                 moving_average.append(moving_sum / normalizer)
-                moving_sum -= (dataset[left_idx][1] * dataset[left_idx][2])
+                moving_sum -= dataset[left_idx][1] * dataset[left_idx][2]
                 normalizer -= dataset[left_idx][2]
                 left_idx += 1
         return moving_average
 
-    def _moving_average_heart_rate(self, workout: TCXExercise, duration_seconds: int = 60):
-        trackpoints = self.get_sorted_trackpoint_deltas(workout, lambda t: t.hr_value, "time")
-        return TcxUtils.calc_moving_average(
-            trackpoints, "time", duration_seconds
+    def _moving_average_heart_rate(
+        self, workout: TCXExercise, duration_seconds: int = 60
+    ):
+        trackpoints = self.get_sorted_trackpoint_deltas(
+            workout, lambda t: t.hr_value, "time"
         )
+        return TcxUtils.calc_moving_average(trackpoints, "time", duration_seconds)
 
     def _moving_average_pace(self, workout: TCXExercise, duration_seconds: int = 60):
-        trackpoints = self.get_sorted_trackpoint_deltas(workout, lambda t: t.tpx_ext.get("Speed"), "distance")
-        return TcxUtils.calc_moving_average(
-            trackpoints,
-            "distance",
-            duration_seconds
+        trackpoints = self.get_sorted_trackpoint_deltas(
+            workout, lambda t: t.tpx_ext.get("Speed"), "distance"
         )
+        return TcxUtils.calc_moving_average(trackpoints, "distance", duration_seconds)
 
     def get_peak_data(self, dataset_name: str, by_month=False):
         # Todo this got really messy after adding the by_month option. Refactor this.
@@ -425,7 +426,9 @@ class TcxUtils(DataUtils):
         if by_month:
             month_data_out = {}
             for month, month_data in monthly_data.items():
-                month_data_out[month] = {k: max(v) for k, v in month_data.items() if len(v) > 0}
+                month_data_out[month] = {
+                    k: max(v) for k, v in month_data.items() if len(v) > 0
+                }
             return month_data_out
 
         return {k: max(v) for k, v in data.items() if len(v) > 0}
@@ -433,12 +436,15 @@ class TcxUtils(DataUtils):
     def get_heart_rate_pace_data(self):
         trackpoints = []
         for workout in self.workouts:
-            raw_trackpoints = [t for t in workout.trackpoints if
-                               t.hr_value is not None and t.tpx_ext.get("Speed") is not None]
+            raw_trackpoints = [
+                t
+                for t in workout.trackpoints
+                if t.hr_value is not None and t.tpx_ext.get("Speed") is not None
+            ]
             raw_trackpoints.sort(key=lambda x: x.time)
             group_size = 20
             for i in range(0, len(raw_trackpoints), group_size):
-                group = raw_trackpoints[i:i + group_size]
+                group = raw_trackpoints[i : i + group_size]
                 first_time = group[0].time
                 hr = sum([t.hr_value for t in group]) / group_size
                 speed = sum([t.tpx_ext.get("Speed") for t in group]) / group_size
@@ -459,16 +465,20 @@ class StravaUtils(DataUtils):
 
     def load_from_source(self):
         filepath = f"{self.DATA_DIR}/{self.JSON_NAME}"
-        with open(filepath, 'r') as file:
+        with open(filepath, "r") as file:
             raw_json = json.load(file)
         data = {}
         for gear, activities in raw_json.items():
             gear_name = self._modify_gear_name(gear)
             data[gear_name] = [
                 MinimalRun(
-                    start_time=datetime.strptime(a['start_date_local'], '%Y-%m-%dT%H:%M:%SZ'),
-                    distance=a['distance']
-                ) for a in activities if a['sport_type'] == 'Run'
+                    start_time=datetime.strptime(
+                        a["start_date_local"], "%Y-%m-%dT%H:%M:%SZ"
+                    ),
+                    distance=a["distance"],
+                )
+                for a in activities
+                if a["sport_type"] == "Run"
             ]
         return data
 
@@ -479,8 +489,98 @@ class StravaUtils(DataUtils):
             return saucony_end_speed_3
         return gear_name
 
-    def workout_start_times(self):
+    def data_period_start_times(self):
         raise NotImplementedError
 
     def distance_by_gear(self):
-        return {gear: sum([a.distance for a in activities]) for gear, activities in self.data.items()}
+        return {
+            gear: sum([a.distance for a in activities])
+            for gear, activities in self.data.items()
+        }
+
+
+class WhoopUtils(DataUtils):
+    DATA_DIR = "data/whoop"
+    CYCLES_FILE = "physiological_cycles.csv"
+
+    def __init__(self):
+        self.cycles = None
+
+    def data_period_start_times(self):
+        return [c.start_time for c in self.cycles if c.start_time]
+
+    def load_data(self):
+        self.cycles = self.load_from_source()
+
+    def load_from_source(self):
+        cycles = []
+        with open(f"{self.DATA_DIR}/{self.CYCLES_FILE}", "r") as file:
+            reader = csv.reader(file)
+            next(reader)
+            for row in reader:
+                cycle = WhoopCycle(*row)
+                if cycle.start_time >= PLAN_START_DATE:
+                    cycles.append(cycle)
+        return cycles
+
+    @staticmethod
+    def _group_averages(grouped_data: list[list[float | int]]):
+        return [sum(g) / len(g) if len(g) > 0 else 0 for g in grouped_data]
+
+    def avg_recovery_score(self, zone: RecoveryZone, weekly=False):
+        def agg_func(collector: dict, zone: RecoveryZone):
+            new_collector = collector.copy()
+            new_collector[zone] = collector.get(zone, 0) + 1
+            return new_collector
+
+        scores = self._group_by_date(
+            [c for c in self.cycles if c.recovery_score],
+            lambda w: RecoveryZone.zone(w.recovery_score),
+            weekly,
+            default_value={zone: 0 for zone in RecoveryZone},
+            agg_func=agg_func,
+        )
+
+        percentages = []
+        for s in scores:
+            total = sum(s.values())
+            if total == 0 or zone not in s:
+                percentages.append(0)
+            else:
+                percentages.append(s[zone] / total * 100)
+        return percentages
+
+    def day_strain(self, weekly=False):
+        grouped = self._group_by_date(
+            [c for c in self.cycles if c.day_strain],
+            lambda w: w.day_strain,
+            weekly,
+            default_value=[],
+            agg_func=lambda x, y: x + [y],
+        )
+        return self._group_averages(grouped)
+
+    def sleep_performance(self, weekly=False):
+        grouped = self._group_by_date(
+            [c for c in self.cycles if c.sleep_performance],
+            lambda w: w.sleep_performance,
+            weekly,
+            default_value=[],
+            agg_func=lambda x, y: x + [y],
+        )
+        return self._group_averages(grouped)
+
+    def asleep_duration(self, weekly=False):
+        grouped = self._group_by_date(
+            [c for c in self.cycles if c.asleep_duration],
+            lambda w: w.asleep_duration,
+            weekly,
+            default_value=[],
+            agg_func=lambda x, y: x + [y],
+        )
+        return self._group_averages(grouped)
+
+
+# w = WhoopUtils()
+# w.load_data()
+# w.avg_recovery_score(RecoveryZone.RED, False)
