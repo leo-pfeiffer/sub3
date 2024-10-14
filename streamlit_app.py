@@ -30,11 +30,6 @@ def get_color(value, min_value=0, max_value=100, cmap_name="Reds"):
     rgba = cmap(norm(value))
     return rgb2hex(rgba)
 
-iframe(
-    "https://home.trainingpeaks.com/athlete/workout/4QC7Z7VYCECLHJR7TFGDUVLOAU",
-    height=800,
-    scrolling=True
-)
 
 with st.sidebar:
     st.image("resources/mcmo_solid_black.png")
