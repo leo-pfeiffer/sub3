@@ -36,3 +36,4 @@ def get_list_of_dates_between(
         dates.append(current)
         current += datetime.timedelta(days=delta)
     return dates
+
